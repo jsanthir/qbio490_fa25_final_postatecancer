@@ -1,0 +1,165 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+```{r}
+if (!require("knitr", quietly = TRUE))
+install.packages("knitr")
+if (!require("BiocManager", quietly = TRUE))
+install.packages("BiocManager")
+BiocManager::install(version = "3.21")
+if (!require("TCGAbiolinks", quietly = TRUE))
+BiocManager::install("TCGAbiolinks")
+if (!require("maftools", quietly = TRUE))
+BiocManager::install("maftools")
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = normalizePath("/home1/jsanthir/490_cluster/analysis_data1"))
+```
+
+```{r}
+clin_query <- GDCquery(project = "TCGA-PRAD",
+data.category = "Clinical",
+data.type = "Clinical Supplement",
+data.format = 'BCR Biotab')
+#GDCdownload(clin_query)
+clinical.BCRtab.all <- GDCprepare(clin_query)
+clinic <- clinical.BCRtab.all$clinical_patient_prad[-c(1,2),]
+```
+```{r}
+colnames(clinic)[ colnames(clinic) == "bcr_patient_barcode" ] <-
+"Tumor_Sample_Barcode"
+maf_query <- GDCquery(
+project = "TCGA-PRAD",
+data.category = "Simple Nucleotide Variation",
+access = "open",
+data.type = "Masked Somatic Mutation",
+workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+#GDCdownload(maf_query, method = "api", files.per.chunk = 100)
+maf <- GDCprepare(maf_query)
+maf_object <- read.maf(maf = maf,
+clinicalData = clinic,
+isTCGA = TRUE)
+
+```
+```{r}
+rna_query <- GDCquery(project ="TCGA-PRAD",
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "STAR - Counts")
+GDCdownload(rna_query)
+rna_se <- GDCprepare(rna_query)
+```
+
+```{r}
+if (!require(survival)) {
+  install.packages("survival")
+}
+
+if (!require(survminer)) {
+  install.packages("survminer")
+}
+
+if (!require(ggplot2)) {
+  install.packages("ggplot2") 
+}
+```
+
+
+```{r}
+library(survival)
+library(survminer)
+library(ggplot2)
+```
+
+
+```{r}
+colnames(clinic) 
+```
+
+```{r}
+head(clinic$gleason_score)
+```
+
+
+```{r}
+age_NA_mask <- !is.na(clinic$age_at_initial_pathologic_diagnosis)
+cleaned_clinic <- clinic[age_NA_mask, ]
+```
+
+```{r}
+cleaned_clinic$age_category <- ifelse(cleaned_clinic$age_at_initial_pathologic_diagnosis <= 35, "Young", ifelse(cleaned_clinic$age_at_initial_pathologic_diagnosis < 50, "Middle", "Old"))
+```
+
+```{r}
+cleaned_clinic$survival_time <- ifelse(cleaned_clinic$death_days_to == "[Not Applicable]", cleaned_clinic$last_contact_days_to, cleaned_clinic$death_days_to)
+```
+
+```{r}
+cleaned_clinic$survival_time <- as.numeric(cleaned_clinic$survival_time)
+```
+
+```{r}
+cleaned_clinic$death_event <- cleaned_clinic$vital_status == "Dead"
+```
+
+```{r}
+survival_object <- Surv(time = cleaned_clinic$survival_time,
+                        event = cleaned_clinic$death_event)
+
+fit_object <- survfit(survival_object ~ age_category, data = cleaned_clinic)
+```
+
+```{r}
+survplot <- ggsurvplot(fit_object,
+                       pval=TRUE,
+                       ggtheme = theme(plot.margin = unit(c(1,1,1,1), "cm")),
+                       legend = 'right')
+
+KM_plot <- survplot$plot + theme_bw() + theme(axis.title = element_text(size=20), 
+                                              axis.text = element_text(size=16),
+                                              legend.title = element_text(size=14),
+                                              legend.text = element_text(size=12))
+
+KM_plot
+```
+```{r}
+saveRDS(maf_object, file = "/home1/jsanthir/490_cluster/analysis_data1/maf_object.rds")
+```
+
+```{r}
+MAF_object <- readRDS(file = "/home1/jsanthir/490_cluster/analysis_data1/maf_object.rds")
+```
+
+```{r}
+clinic$gleason_group <- ifelse(clinic$gleason_score == "Stage IIA", "Stage IIA", ifelse(clinic$gleason_score == "Stage IIB", "Stage IIB", NA))
+
+clinic$gleason_group <- factor(clinic$gleason_group)
+
+maf_object <- read.maf(maf = maf, clinicalData = clinic, isTCGA = TRUE) 
+```
+
+
+
+
+
+
+
