@@ -1,0 +1,384 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+```{r}
+if (!require("knitr", quietly = TRUE))
+install.packages("knitr")
+if (!require("BiocManager", quietly = TRUE))
+install.packages("BiocManager")
+BiocManager::install(version = "3.21")
+if (!require("TCGAbiolinks", quietly = TRUE))
+BiocManager::install("TCGAbiolinks")
+if (!require("maftools", quietly = TRUE))
+BiocManager::install("maftools")
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+```
+
+```{r setup}
+knitr::opts_knit$set(root.dir = normalizePath("/home1/jsanthir/490_cluster/analysis_data1"))
+```
+
+```{r}
+clin_query <- GDCquery(project = "TCGA-PRAD",
+data.category = "Clinical",
+data.type = "Clinical Supplement",
+data.format = 'BCR Biotab')
+#GDCdownload(clin_query)
+clinical.BCRtab.all <- GDCprepare(clin_query)
+clinic <- clinical.BCRtab.all$clinical_patient_prad[-c(1,2),]
+```
+```{r}
+colnames(clinic)[ colnames(clinic) == "bcr_patient_barcode" ] <-
+"Tumor_Sample_Barcode"
+maf_query <- GDCquery(
+project = "TCGA-PRAD",
+data.category = "Simple Nucleotide Variation",
+access = "open",
+data.type = "Masked Somatic Mutation",
+workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+#GDCdownload(maf_query, method = "api", files.per.chunk = 100)
+maf <- GDCprepare(maf_query)
+maf_object <- read.maf(maf = maf,
+clinicalData = clinic,
+isTCGA = TRUE)
+
+```
+```{r}
+rna_query <- GDCquery(project ="TCGA-PRAD",
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "STAR - Counts")
+GDCdownload(rna_query)
+rna_se <- GDCprepare(rna_query)
+```
+
+```{r}
+if (!require(survival)) {
+  install.packages("survival")
+}
+
+if (!require(survminer)) {
+  install.packages("survminer")
+}
+
+if (!require(ggplot2)) {
+  install.packages("ggplot2") 
+}
+```
+
+
+```{r}
+library(survival)
+library(survminer)
+library(ggplot2)
+```
+
+
+```{r}
+colnames(clinic) 
+```
+
+```{r}
+#Looking at what is in Gleason Score 
+head(clinic$gleason_score)
+```
+
+
+```{r}
+#Remove NA from Gleason score data 
+gleason_NA_mask <- !is.na(clinic$gleason_score)
+cleaned_clinic <- clinic[gleason_NA_mask, ]
+```
+
+```{r}
+#Stratify Gleason Scores into Low and High
+cleaned_clinic$gleason_category <- ifelse(cleaned_clinic$gleason_score < 8, "Low", "High")
+```
+
+```{r}
+#Use last contact days to if the patient is still alive for the KM Plot, if not use death days to 
+cleaned_clinic$survival_time <- ifelse(cleaned_clinic$death_days_to == "[Not Applicable]", cleaned_clinic$last_contact_days_to, cleaned_clinic$death_days_to)
+```
+
+```{r}
+#Make survival time a numeric value
+cleaned_clinic$survival_time <- as.numeric(cleaned_clinic$survival_time)
+```
+
+```{r}
+#Indicate if patient is dead or not
+cleaned_clinic$death_event <- cleaned_clinic$vital_status == "Dead"
+```
+
+```{r}
+#Make survival object 
+survival_object <- Surv(time = cleaned_clinic$survival_time,
+                        event = cleaned_clinic$death_event)
+#Sort survival object by Gleason score
+fit_object <- survfit(survival_object ~ gleason_category, data = cleaned_clinic)
+```
+
+```{r}
+#KM Plot based on Gleason score
+survplot <- ggsurvplot(fit_object,
+                       pval=TRUE,
+                       ggtheme = theme(plot.margin = unit(c(1,1,1,1), "cm")),
+                       legend = 'right')
+
+KM_plot <- survplot$plot + theme_bw() + theme(axis.title = element_text(size=20), 
+                                              axis.text = element_text(size=16),
+                                              legend.title = element_text(size=14),
+                                              legend.text = element_text(size=12))
+
+KM_plot
+```
+```{r}
+saveRDS(maf_object, file = "/home1/jsanthir/490_cluster/analysis_data1/maf_object.rds")
+```
+
+```{r}
+MAF_object <- readRDS(file = "/home1/jsanthir/490_cluster/analysis_data1/maf_object.rds")
+```
+
+```{r}
+#Form gleason group column
+clinic$gleason_group <- ifelse(clinic$gleason_score < 8, "Low", "High")
+```
+
+```{r}
+#Read in MAF
+maf_object <- read.maf(maf = maf, clinicalData = clinic, isTCGA = TRUE)
+```
+
+
+```{r}
+#Split MAF by Gleason Score
+low_gleason <- subsetMaf(maf = maf_object, 
+                         clinQuery = "gleason_group == 'Low'")
+
+high_gleason <- subsetMaf(maf = maf_object, 
+                          clinQuery = "gleason_group == 'High'")
+```
+
+```{r}
+#Most frequency mutations Co-Onco
+coOncoplot(m1 = low_gleason, 
+           m2 = high_gleason, 
+           m1Name = "Low Gleason Score", 
+           m2Name = "High Gleason High")
+```
+
+
+```{r}
+#MAPK Pathway genes Co-Onco
+coOncoplot(m1 = low_gleason, 
+           m2 = high_gleason, 
+           m1Name = "Low Gleason (6-7)", 
+           m2Name = "High Gleason (8-10)",
+           genes = c("DUSP1", "MAPK1", "HRAS", "ARAF", "RAF1", "KRAS"))
+```
+
+```{r}
+#Looking for Genes in MAPK Pathway
+genes_to_check <- c("DUSP1","MAP2K1", "MAP2K2", "MAPK1", "MAPK3", "HRAS", "ARAF", "BRAF", "RAF1", "KRAS", "NRAS")
+
+genes_to_check %in% maf_object@data$Hugo_Symbol
+```
+
+```{r}
+#View all genes
+all_genes <- maf_object@data$Hugo_Symbol
+unique(all_genes)
+```
+
+```{r}
+#Looking at all genes
+options(max.print = 10000)  # Set to however many you want
+getGeneSummary(maf_object)
+```
+
+
+```{r}
+#Looking at all genes 
+gene_summary <- getGeneSummary(maf_object)
+head(gene_summary, 50)
+```
+
+```{r}
+#TP53 Co-Lollipop Plot
+lollipopPlot2(m1 = low_gleason, 
+              m2 = high_gleason, 
+              m1_name = "Low Gleason Score", 
+              m2_name = "High Gleason Score", 
+              gene = "TP53")
+```
+
+
+```{r}
+#FOXA1 Co-Lollipop Plot
+lollipopPlot2(m1 = low_gleason,
+              m2 = high_gleason,
+              m1_name = "Low Gleason (6-7)",
+              m2_name = "High Gleason (8-10)",
+              gene = "FOXA1")
+```
+
+
+```{r}
+BiocManager::install("DESeq2")
+library(DESeq2)
+```
+
+```{r}
+# Install if needed
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+BiocManager::install("TCGAbiolinks")
+
+library(TCGAbiolinks)
+
+# Download RNA-seq data for prostate cancer (PRAD)
+query_rna <- GDCquery(
+  project = "TCGA-PRAD",
+  data.category = "Transcriptome Profiling",
+  data.type = "Gene Expression Quantification",
+  workflow.type = "STAR - Counts"
+)
+
+# Download the data (this may take a while!)
+GDCdownload(query_rna)
+
+# Prepare the data
+rna_data <- GDCprepare(query_rna)
+
+# Extract counts matrix
+rna_counts <- assay(rna_data)
+
+# Extract clinical data (already matched!)
+rna_clinical <- as.data.frame(colData(rna_data))
+```
+
+```{r}
+rna_query <- GDCquery(project ="TCGA-PRAD",
+data.category = "Transcriptome Profiling",
+data.type = "Gene Expression Quantification",
+workflow.type = "STAR - Counts")
+GDCdownload(rna_query)
+rna_se <- GDCprepare(rna_query)
+```
+
+
+
+```{r}
+#1
+# DESeq2 preprocessing
+library(DESeq2)
+
+#2
+# Setting variables
+rna_clinical <- as.data.frame(rna_se@colData) # clinical info
+rna_counts <- as.data.frame(rna_se@assays@data$unstranded) # gene count
+rna_genes <- as.data.frame(rna_se@rowRanges@elementMetadata) #
+rownames(rna_genes) <- rna_genes$gene_id # match gene_id
+rownames(rna_counts) <- rna_genes$gene_id # match gene_id with rna_counts
+colnames(rna_counts) <- rownames(rna_clinical) # match rows of rna_clinical with columns of rna_counts
+
+
+
+rna_clinical$gleason_score
+rna_clinical$gleason_group <- ifelse(rna_clinical$gleason_score >= 8, "High", "Low")
+rna_clinical$gleason_group
+
+rna_clinical$race
+rna_clinical$race[rna_clinical$race=="black or african american"] <- "black"
+rna_clinical$race
+rna_clinical$race[rna_clinical$race == "not reported"] <- NA
+rna_clinical$race[rna_clinical$race == "Unknown"] <- NA
+rna_clinical$race
+
+#3
+# renaming values for sake of reading
+rna_clinical$gleason_group[rna_clinical$gleason_group=="High"] <- "High Gleason Score"
+rna_clinical$gleason_group[rna_clinical$gleason_group=="Low"] <- "Low Gleason Score"
+rna_clinical$gleason_group <- factor(rna_clinical$gleason_group)
+rna_clinical$gleason_group
+
+#4
+# removing NA values
+ggmask <- !is.na(rna_clinical$gleason_group) # this is for removing NA values in sLC
+racemask <- !is.na(rna_clinical$race) # this is for removing NA values in age
+rna_clinical <- rna_clinical[ggmask & racemask, ]
+
+#5
+# align samples with each other
+samemask  <- colnames(rna_counts) %in% rownames(rna_clinical)
+rna_counts <- rna_counts[, samemask] ## this is currently outputting 0 variables which is not right (check #2) ##
+rna_clinical <- rna_clinical[colnames(rna_counts), ]
+
+#6
+# this is the filter the genes and then realign them w rna_counts
+keep_genes2 <- rowSums(rna_counts) >= 1000 # filter genes with >=1000
+rna_counts <- rna_counts[keep_genes2, ]
+
+```
+
+```{r}
+
+# creating DESeq2 Data Set
+# creating dds variable
+dds <- DESeqDataSetFromMatrix(countData = rna_counts,
+                              colData = rna_clinical,
+                              design = ~ race + gleason_group)
+
+# Run DESeq2
+dds_obj <- DESeq(dds)
+
+resultsNames(dds_obj)
+
+# Get results comparing Tumor vs Normal
+results <- results(dds_obj, format = "DataFrame",
+                  contrast = c("gleason_group", "High Gleason Score", "Low Gleason Score"))
+
+results <- data.frame(results)
+
+```
+
+```{r}
+# preprocessing - filter out NA values
+results_filtered <- results[!is.na(results$padj), ]
+
+# labelling
+results_filtered$gene_name <- rna_genes$gene_name[match(rownames(results_filtered), rna_genes$gene_id)]
+
+# Create the plot - EnhancedVolcano will calculate -log10(padj) automatically
+BiocManager::install("EnhancedVolcano")
+library(EnhancedVolcano)
+EnhancedVolcano(results_filtered,
+                lab = results_filtered$gene_name,
+                x = 'log2FoldChange',
+                y = 'padj',  # Use padj directly, not minuslog10apdj
+                title = 'Gleason Grading: High vs Low Scorers',
+                pointSize = 1.0,
+                labSize = 5.0)
+
+library(ggplot2)
+ggsave("/home1/jsanthir/490_cluster/GGEVPlot.png")
+```
+```
